@@ -200,3 +200,6 @@ letsencrypt/
 *.old
 *.orig
 *~
+
+/claude
+.claude/
