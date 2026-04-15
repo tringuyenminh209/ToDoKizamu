@@ -50,7 +50,7 @@ return new class extends Migration
             $table->timestamps();
 
             // Indexes
-            $table->unique(['language_id', 'slug'], 'idx_language_slug');
+            $table->unique(['language_id', 'slug'], 'idx_exercises_language_slug');
             $table->index('language_id');
             $table->index('difficulty');
             $table->index('success_rate');

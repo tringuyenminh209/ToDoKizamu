@@ -51,9 +51,9 @@ return new class extends Migration
             $table->timestamps();
 
             // Indexes
-            $table->index(['user_id', 'status'], 'idx_user_status');
-            $table->index(['user_id', 'due_date'], 'idx_user_due_date');
-            $table->index(['user_id', 'type'], 'idx_user_type');
+            $table->index(['user_id', 'status'], 'idx_ts_user_status');
+            $table->index(['user_id', 'due_date'], 'idx_ts_user_due_date');
+            $table->index(['user_id', 'type'], 'idx_ts_user_type');
         });
     }
 

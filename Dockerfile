@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
+    libpq-dev \
     zip \
     unzip \
     nginx \
@@ -30,7 +31,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 
 # Install PHP extensions
 RUN docker-php-ext-install \
-    pdo_mysql \
+    pdo_pgsql \
     mbstring \
     exif \
     pcntl \

@@ -20,17 +20,12 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // First, convert existing timestamp data to time format
+        // PostgreSQL: ALTER with USING to convert timestamp → time in one step
         DB::statement("
-            UPDATE tasks
-            SET scheduled_time = TIME(scheduled_time)
-            WHERE scheduled_time IS NOT NULL
+            ALTER TABLE tasks
+            ALTER COLUMN scheduled_time TYPE time
+            USING scheduled_time::time
         ");
-
-        // Then modify the column type
-        Schema::table('tasks', function (Blueprint $table) {
-            $table->time('scheduled_time')->nullable()->change();
-        });
     }
 
     /**

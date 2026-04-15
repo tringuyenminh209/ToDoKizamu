@@ -47,7 +47,7 @@ return new class extends Migration
 
             // Indexes
             $table->index(['user_id', 'day', 'period'], 'idx_user_day_period');
-            $table->index(['user_id', 'created_at'], 'idx_user_created');
+            $table->index(['user_id', 'created_at'], 'idx_tc_user_created');
         });
     }
 

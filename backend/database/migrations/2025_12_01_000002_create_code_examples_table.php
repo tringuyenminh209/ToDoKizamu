@@ -51,7 +51,7 @@ return new class extends Migration
             $table->index('views_count');
 
             // Full-text search index
-            $table->fullText(['title', 'description', 'code'], 'idx_fulltext_search');
+            $table->fullText(['title', 'description', 'code'], 'idx_ce_fulltext_search');
         });
     }
 

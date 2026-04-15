@@ -1,36 +1,6 @@
 # Docker Compose for Production (2 vCPUs / 約4GB RAM 想定)
-# 配分: MySQL 0.5 + Redis 0.2 + App 0.55 + Frontend 0.35 + Ollama 0.4 = 2.0 CPU
+# 配分: Redis 0.2 + App 0.7 + Reverb 0.3 + Frontend 0.4 + Supabase(外部) = 1.6 CPU
 services:
-  # MySQL Database
-  mysql:
-    image: mysql:8.0
-    container_name: todo-mysql-prod
-    restart: always
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-      MYSQL_DATABASE: ${DB_DATABASE:-todo_app}
-      MYSQL_USER: ${DB_USERNAME:-todo_user}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - mysql_data:/var/lib/mysql
-    ports:
-      - "3306:3306"
-    networks:
-      - todo-network
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 768M
-        reservations:
-          cpus: '0.2'
-          memory: 384M
-
   # Redis Cache
   redis:
     image: redis:7-alpine
@@ -74,11 +44,11 @@ services:
       - APP_KEY=${APP_KEY}
       - APP_URL=${APP_URL}
       - APP_TIMEZONE=${APP_TIMEZONE:-Asia/Tokyo}
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_DATABASE=${DB_DATABASE:-todo_app}
-      - DB_USERNAME=${DB_USERNAME:-root}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=${DB_HOST:-aws-1-ap-northeast-1.pooler.supabase.com}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_DATABASE=${DB_DATABASE:-postgres}
+      - DB_USERNAME=${DB_USERNAME}
       - DB_PASSWORD=${DB_PASSWORD}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -103,13 +73,10 @@ services:
     networks:
       - todo-network
     depends_on:
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_healthy
       reverb:
         condition: service_started
-      # ollama は別サーバー化のため削除
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:80/health || exit 1"]
       interval: 30s
@@ -219,11 +186,6 @@ services:
   #       reservations:
   #         cpus: '0.2'
   #         memory: 1G
-
-volumes:
-  mysql_data:
-    driver: local
-  # ollama_data: Ollama を別サーバーで運用するため削除
 
 networks:
   todo-network:

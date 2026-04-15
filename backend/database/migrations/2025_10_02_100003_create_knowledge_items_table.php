@@ -72,11 +72,11 @@ return new class extends Migration
             $table->timestamps();
 
             // Indexes
-            $table->index(['user_id', 'category_id'], 'idx_user_category');
-            $table->index(['user_id', 'item_type'], 'idx_user_type');
-            $table->index(['user_id', 'is_favorite'], 'idx_user_favorite');
-            $table->index(['user_id', 'next_review_date'], 'idx_next_review');
-            $table->index(['user_id', 'created_at'], 'idx_user_created');
+            $table->index(['user_id', 'category_id'], 'idx_ki_user_category');
+            $table->index(['user_id', 'item_type'], 'idx_ki_user_type');
+            $table->index(['user_id', 'is_favorite'], 'idx_ki_user_favorite');
+            $table->index(['user_id', 'next_review_date'], 'idx_ki_next_review');
+            $table->index(['user_id', 'created_at'], 'idx_ki_user_created');
             $table->index('learning_path_id');
             $table->index('source_task_id');
 

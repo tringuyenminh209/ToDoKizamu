@@ -19,10 +19,12 @@ services:
       - APP_ENV=${APP_ENV:-local}
       - APP_DEBUG=${APP_DEBUG:-false}
       - APP_TIMEZONE=${APP_TIMEZONE:-Asia/Tokyo}
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_DATABASE=${DB_DATABASE:-todo_app}
-      - DB_USERNAME=${DB_USERNAME:-todo_user}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=aws-1-ap-northeast-1.pooler.supabase.com
+      - DB_PORT=5432
+      - DB_DATABASE=postgres
+      - DB_USERNAME=postgres.bajlvdghfgkphhrfqzzv
+      - DB_PASSWORD=tringuyenminh209
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - QUEUE_CONNECTION=redis
@@ -42,7 +44,6 @@ services:
       - REVERB_PORT=8080
       - REVERB_SCHEME=http
     depends_on:
-      - mysql
       - redis
       - reverb
     networks:
@@ -84,34 +85,6 @@ services:
         limits:
           cpus: '0.5'
           memory: 256M
-
-  # MySQL Database
-  mysql:
-    image: mysql:8.0
-    container_name: todo-mysql
-    restart: unless-stopped
-    environment:
-      # DB_ROOT_PASSWORD 未設定時は DB_PASSWORD を使用（dev の .env に DB_ROOT_PASSWORD があればそれを使う）
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-${DB_PASSWORD}}
-      MYSQL_DATABASE: ${DB_DATABASE:-todo_app}
-      MYSQL_USER: ${DB_USERNAME:-todo_user}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./docker/mysql/mysql.cnf:/etc/mysql/conf.d/mysql.cnf
-    ports:
-      - "127.0.0.1:3308:3306"
-    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
-    networks:
-      - todo-network
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
-        reservations:
-          cpus: '1.0'
-          memory: 1G
 
   # Redis Cache & Queue
   redis:
@@ -190,8 +163,6 @@ services:
   #         memory: 1.5G
 
 volumes:
-  mysql_data:
-    driver: local
   redis_data:
     driver: local
   # ollama_data:  # ローカル ollama 不要のためコメント

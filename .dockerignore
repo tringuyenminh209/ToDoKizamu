@@ -52,6 +52,7 @@ backend/storage/framework/sessions/*
 backend/storage/framework/views/*
 backend/bootstrap/cache/*
 backend/.env
+backend/.env1
 backend/.env.example
 backend/.env.testing
 backend/.env.production
