@@ -1,0 +1,497 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "TodoApp — Simple EC2 Deployment — generated from aws-simple-ec2.drawio"
+
+# Parsed: 1 compute (EC2 t3.medium), 1 IGW, 1 public subnet
+# Inferred: VPC, RouteTable, Routes, SecurityGroup, IAM Role+Profile, EIP, EIPAssociation
+# External: Supabase PostgreSQL, Ollama LLM (outside AWS)
+# Total CFN resources: 13
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todoapp
+    Description: Prefix for all resource names
+
+  Environment:
+    Type: String
+    Default: test
+    AllowedValues: [test, prod]
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 KeyPair name for SSH access
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.small, t3.medium, t3.large]
+
+  GitRepoUrl:
+    Type: String
+    Description: "GitHub repository HTTPS URL (e.g. https://github.com/org/todoapp.git)"
+
+  GitBranch:
+    Type: String
+    Default: main
+
+  AppKey:
+    Type: String
+    NoEcho: true
+    Description: "Laravel APP_KEY (base64:...)"
+
+  AppUrl:
+    Type: String
+    Default: ""
+    Description: "Backend API base URL. Leave blank to auto-detect from EC2 public IP (http://<IP>:8080)"
+
+  FrontendUrl:
+    Type: String
+    Default: https://todokizamu.me
+    Description: "Frontend canonical URL for CORS (FRONTEND_URL)"
+
+  FrontendUrlWww:
+    Type: String
+    Default: ""
+    Description: "www variant of frontend URL (optional, FRONTEND_URL_WWW)"
+
+  DbHost:
+    Type: String
+    Default: aws-1-ap-northeast-1.pooler.supabase.com
+    Description: Supabase connection pooler host
+
+  DbPort:
+    Type: String
+    Default: "5432"
+
+  DbDatabase:
+    Type: String
+    Default: postgres
+
+  DbUsername:
+    Type: String
+    NoEcho: true
+    Description: Supabase DB username (project ref format)
+
+  DbPassword:
+    Type: String
+    NoEcho: true
+    Description: Supabase DB password
+
+  OllamaBaseUrl:
+    Type: String
+    Default: http://127.0.0.1:11434/v1
+    Description: "Ollama API base URL on external EC2 (e.g. http://52.203.35.157:11434/v1)"
+
+  OpenAIModel:
+    Type: String
+    Default: qwen2.5:3b
+
+  OpenAIApiKey:
+    Type: String
+    Default: sk-dummy-key
+    NoEcho: true
+
+  ReverbAppId:
+    Type: String
+    Default: todokizamu
+
+  ReverbAppKey:
+    Type: String
+    Default: todokizamu-key
+    NoEcho: true
+
+  ReverbAppSecret:
+    Type: String
+    Default: todokizamu-secret
+    NoEcho: true
+
+  NextPublicReverbHost:
+    Type: String
+    Default: ""
+    Description: "Reverb host for Next.js frontend. Leave blank to use EC2 public IP."
+
+  NextPublicReverbPort:
+    Type: String
+    Default: "8081"
+
+  NextPublicReverbScheme:
+    Type: String
+    Default: http
+    AllowedValues: [http, https]
+
+Mappings:
+  RegionAMI:
+    ap-northeast-1:
+      AL2023: ami-0599b6e53ca798bb2
+    ap-northeast-3:
+      AL2023: ami-047e4b9e6b2cee9e4
+    ap-southeast-1:
+      AL2023: ami-0c02fb55956c7d316
+    us-east-1:
+      AL2023: ami-0182f373e66f89c85
+
+Resources:
+
+  # ── 1. VPC ──────────────────────────────────────────────────────────────────
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc
+
+  # ── 2. Public Subnet ─────────────────────────────────────────────────────────
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-subnet
+
+  # ── 3. Internet Gateway ───────────────────────────────────────────────────────
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-igw
+
+  # ── 4. Attach IGW to VPC ──────────────────────────────────────────────────────
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ── 5. Public Route Table ──────────────────────────────────────────────────────
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-rt
+
+  # ── 6. Default Route → IGW (requires IGW attached first) ──────────────────────
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # ── 7. Subnet ↔ Route Table ────────────────────────────────────────────────────
+  PublicSubnetRTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # ── 8. Security Group ─────────────────────────────────────────────────────────
+  # Inbound ports from drawio Security Group badge + edges
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${ProjectName} EC2 — Nginx/Laravel/Next.js/Reverb"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP Nginx
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS Nginx
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: Laravel API
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          CidrIp: 0.0.0.0/0
+          Description: Reverb WebSocket
+        - IpProtocol: tcp
+          FromPort: 8088
+          ToPort: 8088
+          CidrIp: 0.0.0.0/0
+          Description: Next.js Frontend
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound (Supabase :5432, Ollama :11434, Docker Hub)
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-sg
+
+  # ── 9. IAM Role ───────────────────────────────────────────────────────────────
+  # SSM for session access without SSH, CloudWatch for logs
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-role
+
+  # ── 10. Instance Profile ──────────────────────────────────────────────────────
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${ProjectName}-ec2-profile
+      Roles:
+        - !Ref EC2Role
+
+  # ── 11. Elastic IP (requires IGW attached) ────────────────────────────────────
+  EC2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: IGWAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-eip
+
+  # ── 12. EC2 Instance ──────────────────────────────────────────────────────────
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AL2023]
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
+            echo "=== START: $(date) ==="
+
+            # Always signal CFN on EXIT — success or failure
+            trap '/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region} || true' EXIT
+
+            set -euo pipefail
+
+            # ── Install Docker + utils ─────────────────────────────────────────
+            dnf update -y
+            dnf install -y docker git python3 curl
+
+            systemctl enable --now docker
+            usermod -aG docker ec2-user
+
+            # ── Docker Compose v2 plugin ──────────────────────────────────────
+            mkdir -p /usr/local/lib/docker/cli-plugins
+            COMPOSE_VER=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null \
+              || echo "v2.27.0")
+            curl -fsSL "https://github.com/docker/compose/releases/download/${!COMPOSE_VER}/docker-compose-linux-x86_64" \
+              -o /usr/local/lib/docker/cli-plugins/docker-compose
+            chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+            # ── Docker Buildx plugin ──────────────────────────────────────────
+            BUILDX_VER=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null \
+              || echo "v0.17.1")
+            curl -fsSL "https://github.com/docker/buildx/releases/download/${!BUILDX_VER}/buildx-${!BUILDX_VER}.linux-amd64" \
+              -o /usr/local/lib/docker/cli-plugins/docker-buildx
+            chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+
+            # ── Clone repository ──────────────────────────────────────────────
+            mkdir -p /opt/todoapp
+            cd /opt/todoapp
+            git clone --branch ${GitBranch} ${GitRepoUrl} .
+
+            # ── Resolve EC2 public IP ─────────────────────────────────────────
+            EC2_PUBLIC_IP=$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4 \
+              || echo "127.0.0.1")
+            echo "EC2 public IP: ${!EC2_PUBLIC_IP}"
+
+            # ── Export CFN params as env vars for Python ──────────────────────
+            # CFN Fn::Sub substitutes ${Param} here at deploy time → literal values in script
+            export _EC2_IP="${!EC2_PUBLIC_IP}"
+            export _APP_KEY="${AppKey}"
+            export _APP_URL_PARAM="${AppUrl}"
+            export _DB_HOST="${DbHost}"
+            export _DB_PORT="${DbPort}"
+            export _DB_DATABASE="${DbDatabase}"
+            export _DB_USERNAME="${DbUsername}"
+            export _DB_PASSWORD="${DbPassword}"
+            export _OPENAI_API_KEY="${OpenAIApiKey}"
+            export _OLLAMA_BASE_URL="${OllamaBaseUrl}"
+            export _OPENAI_MODEL="${OpenAIModel}"
+            export _FRONTEND_URL="${FrontendUrl}"
+            export _FRONTEND_URL_WWW="${FrontendUrlWww}"
+            export _REVERB_APP_ID="${ReverbAppId}"
+            export _REVERB_APP_KEY="${ReverbAppKey}"
+            export _REVERB_APP_SECRET="${ReverbAppSecret}"
+            export _REVERB_HOST_PARAM="${NextPublicReverbHost}"
+            export _REVERB_PORT="${NextPublicReverbPort}"
+            export _REVERB_SCHEME="${NextPublicReverbScheme}"
+
+            # ── Write .env.prod using Python (CRLF-safe) ─────────────────────
+            python3 << 'PYEOF'
+            import os
+
+            ec2_ip        = os.environ['_EC2_IP']
+            app_url_param = os.environ.get('_APP_URL_PARAM', '').strip()
+            app_url       = app_url_param if app_url_param else f"http://{ec2_ip}:8080"
+            reverb_host   = os.environ.get('_REVERB_HOST_PARAM', '').strip() or ec2_ip
+
+            lines = [
+                f"APP_KEY={os.environ['_APP_KEY']}",
+                f"APP_URL={app_url}",
+                "APP_TIMEZONE=Asia/Tokyo",
+                "APP_ENV=production",
+                "APP_DEBUG=false",
+                "",
+                "DB_CONNECTION=pgsql",
+                f"DB_HOST={os.environ['_DB_HOST']}",
+                f"DB_PORT={os.environ['_DB_PORT']}",
+                f"DB_DATABASE={os.environ['_DB_DATABASE']}",
+                f"DB_USERNAME={os.environ['_DB_USERNAME']}",
+                f"DB_PASSWORD={os.environ['_DB_PASSWORD']}",
+                "",
+                "REDIS_HOST=redis",
+                "REDIS_PORT=6379",
+                "QUEUE_CONNECTION=redis",
+                "CACHE_DRIVER=redis",
+                "SESSION_DRIVER=redis",
+                "",
+                f"OPENAI_API_KEY={os.environ['_OPENAI_API_KEY']}",
+                f"OLLAMA_BASE_URL={os.environ['_OLLAMA_BASE_URL']}",
+                f"OPENAI_BASE_URL={os.environ['_OLLAMA_BASE_URL']}",
+                f"OPENAI_MODEL={os.environ['_OPENAI_MODEL']}",
+                "",
+                f"FRONTEND_URL={os.environ['_FRONTEND_URL']}",
+                f"FRONTEND_URL_WWW={os.environ['_FRONTEND_URL_WWW']}",
+                "",
+                "BROADCAST_CONNECTION=reverb",
+                f"REVERB_APP_ID={os.environ['_REVERB_APP_ID']}",
+                f"REVERB_APP_KEY={os.environ['_REVERB_APP_KEY']}",
+                f"REVERB_APP_SECRET={os.environ['_REVERB_APP_SECRET']}",
+                "REVERB_HOST=reverb",
+                "REVERB_PORT=8080",
+                "REVERB_SCHEME=http",
+                "",
+                f"NEXT_PUBLIC_API_URL={app_url}/api",
+                "NEXT_PUBLIC_BACKEND_URL=http://app:80",
+                f"NEXT_PUBLIC_REVERB_APP_KEY={os.environ['_REVERB_APP_KEY']}",
+                f"NEXT_PUBLIC_REVERB_HOST={reverb_host}",
+                f"NEXT_PUBLIC_REVERB_PORT={os.environ['_REVERB_PORT']}",
+                f"NEXT_PUBLIC_REVERB_SCHEME={os.environ['_REVERB_SCHEME']}",
+                "",
+                "APP_PORT=8080",
+                "FRONTEND_PORT=8088",
+            ]
+
+            with open("/opt/todoapp/.env.prod", "w", newline="\n") as f:
+                f.write("\n".join(lines) + "\n")
+
+            print("Wrote /opt/todoapp/.env.prod")
+            PYEOF
+
+            chown -R ec2-user:ec2-user /opt/todoapp
+
+            # ── Build and start all services ──────────────────────────────────
+            cd /opt/todoapp
+            docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+
+            # ── Wait for app to be healthy, then run migrations ───────────────
+            echo "Waiting for todo-app-backend-prod to become healthy..."
+            MIGRATED=0
+            for i in $(seq 1 30); do
+              HEALTH=$(docker inspect --format='{{.State.Health.Status}}' todo-app-backend-prod 2>/dev/null || echo "not_found")
+              echo "Attempt ${!i}/30 — health: ${!HEALTH}"
+              if [ "${!HEALTH}" = "healthy" ]; then
+                docker compose -f docker-compose.prod.yml --env-file .env.prod \
+                  exec -T app php artisan migrate --force
+                MIGRATED=1
+                echo "Migrations completed."
+                break
+              fi
+              sleep 15
+            done
+
+            if [ "${!MIGRATED}" = "0" ]; then
+              echo "WARNING: app never became healthy — migrations skipped"
+            fi
+
+            echo "=== DONE: $(date) ==="
+
+      CreationPolicy:
+        ResourceSignal:
+          Count: 1
+          Timeout: PT25M
+
+  # ── 13. EIP Association ───────────────────────────────────────────────────────
+  EC2EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref EC2Instance
+      EIP: !Ref EC2EIP
+
+Outputs:
+  PublicIP:
+    Description: EC2 Elastic IP address
+    Value: !Ref EC2EIP
+    Export:
+      Name: !Sub ${ProjectName}-public-ip
+
+  AppAPIUrl:
+    Description: Laravel API base URL
+    Value: !Sub "http://${EC2EIP}:8080"
+
+  FrontendAppUrl:
+    Description: Next.js Frontend URL
+    Value: !Sub "http://${EC2EIP}:8088"
+
+  ReverbWsUrl:
+    Description: Reverb WebSocket URL
+    Value: !Sub "ws://${EC2EIP}:8081"
+
+  SSHCommand:
+    Description: SSH command to connect to the instance
+    Value: !Sub "ssh -i ${KeyName}.pem ec2-user@${EC2EIP}"
+
+  UserDataLog:
+    Description: Tail the deployment log on the instance
+    Value: !Sub "ssh -i ${KeyName}.pem ec2-user@${EC2EIP} 'sudo tail -f /var/log/user-data.log'"
