@@ -346,7 +346,7 @@ Resources:
             echo "EC2 public IP: ${!EC2_PUBLIC_IP}"
 
             # ── Export CFN params as env vars for Python ──────────────────────
-            # CFN Fn::Sub substitutes ${Param} here at deploy time → literal values in script
+            # CFN Fn::Sub substitutes parameter references at deploy time → literal values in script
             export _EC2_IP="${!EC2_PUBLIC_IP}"
             export _APP_KEY="${AppKey}"
             export _APP_URL_PARAM="${AppUrl}"

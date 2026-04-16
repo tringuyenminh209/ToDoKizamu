@@ -1,6 +1,35 @@
 # Docker Compose for Production (2 vCPUs / 約4GB RAM 想定)
-# 配分: Redis 0.2 + App 0.7 + Reverb 0.3 + Frontend 0.4 + Supabase(外部) = 1.6 CPU
+# 配分: Nginx-proxy 0.1 + Redis 0.2 + App 0.55 + Reverb 0.3 + Frontend 0.35 + Supabase(外部) = 1.5 CPU
 services:
+  # Nginx Reverse Proxy — listens on port 80, routes by hostname
+  # api.todokizamu.me  → app:80 (Laravel) + reverb:8080 (WebSocket /app)
+  # todokizamu.me      → frontend:3000 (Next.js)
+  nginx-proxy:
+    image: nginx:1.27-alpine
+    container_name: todo-nginx-proxy-prod
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - todo-network
+    depends_on:
+      app:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+      reverb:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
   # Redis Cache
   redis:
     image: redis:7-alpine
