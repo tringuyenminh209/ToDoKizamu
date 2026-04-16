@@ -282,6 +282,10 @@ Resources:
   # ── 12. EC2 Instance ──────────────────────────────────────────────────────────
   EC2Instance:
     Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT25M
     Properties:
       InstanceType: !Ref InstanceType
       ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AL2023]
@@ -456,11 +460,6 @@ Resources:
             fi
 
             echo "=== DONE: $(date) ==="
-
-      CreationPolicy:
-        ResourceSignal:
-          Count: 1
-          Timeout: PT25M
 
   # ── 13. EIP Association ───────────────────────────────────────────────────────
   EC2EIPAssociation:
