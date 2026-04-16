@@ -48,6 +48,9 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 # Copy application files
 COPY backend/ .
 
+# Ensure bootstrap/cache exists (gitignored, must be created before composer)
+RUN mkdir -p bootstrap/cache
+
 # Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 

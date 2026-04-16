@@ -2,9 +2,10 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: "TodoApp — Simple EC2 Deployment — generated from aws-simple-ec2.drawio"
 
 # Parsed: 1 compute (EC2 t3.medium), 1 IGW, 1 public subnet
-# Inferred: VPC, RouteTable, Routes, SecurityGroup, IAM Role+Profile, EIP, EIPAssociation
+# Inferred: VPC, RouteTable, Routes, SecurityGroup, EIP, EIPAssociation
+# IAM: uses pre-existing LabInstanceProfile (AWS Academy — no iam:CreateRole permission)
 # External: Supabase PostgreSQL, Ollama LLM (outside AWS)
-# Total CFN resources: 13
+# Total CFN resources: 11
 
 Parameters:
   ProjectName:
@@ -119,6 +120,11 @@ Parameters:
     Default: http
     AllowedValues: [http, https]
 
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    Description: "Pre-existing IAM Instance Profile name (AWS Academy: LabInstanceProfile)"
+
 Mappings:
   RegionAMI:
     ap-northeast-1:
@@ -200,7 +206,7 @@ Resources:
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: !Sub "${ProjectName} EC2 — Nginx/Laravel/Next.js/Reverb"
+      GroupDescription: !Sub "${ProjectName} EC2 Nginx Laravel NextJS Reverb"
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -241,33 +247,9 @@ Resources:
         - Key: Name
           Value: !Sub ${ProjectName}-ec2-sg
 
-  # ── 9. IAM Role ───────────────────────────────────────────────────────────────
-  # SSM for session access without SSH, CloudWatch for logs
-  EC2Role:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${ProjectName}-ec2-role
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-ec2-role
-
-  # ── 10. Instance Profile ──────────────────────────────────────────────────────
-  EC2InstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName: !Sub ${ProjectName}-ec2-profile
-      Roles:
-        - !Ref EC2Role
+  # ── 9+10. IAM — use pre-existing LabRole (AWS Academy has no iam:CreateRole) ──
+  # EC2Role and EC2InstanceProfile are NOT created here.
+  # LabInstanceProfile (wrapping LabRole) is pre-provisioned by AWS Academy.
 
   # ── 11. Elastic IP (requires IGW attached) ────────────────────────────────────
   EC2EIP:
@@ -282,10 +264,6 @@ Resources:
   # ── 12. EC2 Instance ──────────────────────────────────────────────────────────
   EC2Instance:
     Type: AWS::EC2::Instance
-    CreationPolicy:
-      ResourceSignal:
-        Count: 1
-        Timeout: PT25M
     Properties:
       InstanceType: !Ref InstanceType
       ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AL2023]
@@ -293,7 +271,7 @@ Resources:
       SubnetId: !Ref PublicSubnet
       SecurityGroupIds:
         - !Ref EC2SecurityGroup
-      IamInstanceProfile: !Ref EC2InstanceProfile
+      IamInstanceProfile: !Ref InstanceProfileName
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -307,46 +285,34 @@ Resources:
         Fn::Base64:
           Fn::Sub: |
             #!/bin/bash
-            exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
+            exec > /var/log/user-data.log 2>&1
+            set -uxo pipefail
             echo "=== START: $(date) ==="
 
-            # Always signal CFN on EXIT — success or failure
-            trap '/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region} || true' EXIT
-
-            set -euo pipefail
-
-            # ── Install Docker + utils ─────────────────────────────────────────
+            # ── Install utils + Docker (AL2023 built-in package) ────────────────
             dnf update -y
-            dnf install -y docker git python3 curl
+            dnf install -y --allowerasing git python3 curl docker
 
             systemctl enable --now docker
             usermod -aG docker ec2-user
 
-            # ── Docker Compose v2 plugin ──────────────────────────────────────
+            # ── Docker Compose v2 plugin (fixed version, no GitHub API call) ────
             mkdir -p /usr/local/lib/docker/cli-plugins
-            COMPOSE_VER=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest \
-              | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null \
-              || echo "v2.27.0")
-            curl -fsSL "https://github.com/docker/compose/releases/download/${!COMPOSE_VER}/docker-compose-linux-x86_64" \
+            curl -fsSL "https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64" \
               -o /usr/local/lib/docker/cli-plugins/docker-compose
             chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-            # ── Docker Buildx plugin ──────────────────────────────────────────
-            BUILDX_VER=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
-              | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null \
-              || echo "v0.17.1")
-            curl -fsSL "https://github.com/docker/buildx/releases/download/${!BUILDX_VER}/buildx-${!BUILDX_VER}.linux-amd64" \
-              -o /usr/local/lib/docker/cli-plugins/docker-buildx
-            chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
             # ── Clone repository ──────────────────────────────────────────────
             mkdir -p /opt/todoapp
             cd /opt/todoapp
             git clone --branch ${GitBranch} ${GitRepoUrl} .
 
-            # ── Resolve EC2 public IP ─────────────────────────────────────────
-            EC2_PUBLIC_IP=$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4 \
-              || echo "127.0.0.1")
+            # ── Resolve EC2 public IP (IMDSv2 requires token) ─────────────────
+            IMDS_TOKEN=$(curl -fsSL -X PUT "http://169.254.169.254/latest/api/token" \
+              -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || echo "")
+            EC2_PUBLIC_IP=$(curl -fsSL \
+              -H "X-aws-ec2-metadata-token: ${!IMDS_TOKEN}" \
+              http://169.254.169.254/latest/meta-data/public-ipv4 || echo "127.0.0.1")
             echo "EC2 public IP: ${!EC2_PUBLIC_IP}"
 
             # ── Export CFN params as env vars for Python ──────────────────────
@@ -460,6 +426,7 @@ Resources:
             fi
 
             echo "=== DONE: $(date) ==="
+            # UserData complete — instance stays running for SSH debug if needed
 
   # ── 13. EIP Association ───────────────────────────────────────────────────────
   EC2EIPAssociation:
